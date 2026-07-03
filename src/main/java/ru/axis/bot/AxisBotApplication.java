@@ -10,6 +10,9 @@ import ru.axis.bot.config.AppConfig;
 import ru.axis.bot.db.Database;
 import ru.axis.bot.db.KnowledgeRepository;
 import ru.axis.bot.db.ProfileRepository;
+import ru.axis.bot.db.ActivityRepository;
+import ru.axis.bot.db.AdminRepository;
+import ru.axis.bot.service.AdminService;
 import ru.axis.bot.service.KnowledgeService;
 import ru.axis.bot.service.MessageHandler;
 import ru.axis.bot.vk.VkApiClient;
@@ -34,15 +37,19 @@ public final class AxisBotApplication {
 
         ProfileRepository profileRepository = new ProfileRepository(database);
         KnowledgeRepository knowledgeRepository = new KnowledgeRepository(database);
+        VkApiClient vkApiClient = new VkApiClient(httpClient, config);
+        ActivityRepository activityRepository = new ActivityRepository(database);
+        AdminRepository adminRepository = new AdminRepository(database);
+        AdminService adminService = new AdminService(config, adminRepository, activityRepository, vkApiClient);
         KieAiClient kieAiClient = new KieAiClient(httpClient, config);
         KnowledgeService knowledgeService = new KnowledgeService(knowledgeRepository, kieAiClient, config);
-        VkApiClient vkApiClient = new VkApiClient(httpClient, config);
         MessageHandler messageHandler = new MessageHandler(
                 config,
                 vkApiClient,
                 profileRepository,
                 knowledgeRepository,
-                knowledgeService
+                knowledgeService,
+                adminService
         );
 
         log.info("Axis bot started. Group ID={}, admins={}, AI enabled={}",

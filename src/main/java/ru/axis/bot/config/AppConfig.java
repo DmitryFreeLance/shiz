@@ -48,6 +48,10 @@ public record AppConfig(
         return adminIds.contains(userId);
     }
 
+    public boolean isBootstrapAdmin(long userId) {
+        return adminIds.contains(userId);
+    }
+
     public boolean aiConfigured() {
         return aiEnabled && !kieApiKey.isBlank();
     }

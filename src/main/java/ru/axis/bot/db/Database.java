@@ -41,6 +41,21 @@ public final class Database {
             connection.createStatement().execute("""
                     CREATE INDEX IF NOT EXISTS idx_knowledge_category ON knowledge_entries(category)
                     """);
+            connection.createStatement().execute("""
+                    CREATE TABLE IF NOT EXISTS bot_admins (
+                        vk_user_id INTEGER PRIMARY KEY,
+                        added_by INTEGER NOT NULL,
+                        added_at TEXT NOT NULL
+                    )
+                    """);
+            connection.createStatement().execute("""
+                    CREATE TABLE IF NOT EXISTS active_users (
+                        vk_user_id INTEGER PRIMARY KEY,
+                        last_peer_id INTEGER NOT NULL,
+                        message_count INTEGER NOT NULL DEFAULT 1,
+                        last_seen_at TEXT NOT NULL
+                    )
+                    """);
         }
     }
 

@@ -9,13 +9,16 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.StringJoiner;
 import java.util.concurrent.ThreadLocalRandom;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import ru.axis.bot.config.AppConfig;
+import ru.axis.bot.model.VkUser;
 
 public final class VkApiClient {
     private static final Logger log = LoggerFactory.getLogger(VkApiClient.class);
@@ -85,6 +88,29 @@ public final class VkApiClient {
         JsonNode response = callMethod("utils.resolveScreenName", Map.of("screen_name", screenName));
         JsonNode result = response.path("response");
         return result.isMissingNode() || result.isNull() ? null : result;
+    }
+
+    public List<VkUser> getUsers(List<Long> userIds) throws Exception {
+        if (userIds == null || userIds.isEmpty()) {
+            return List.of();
+        }
+        String ids = userIds.stream()
+                .distinct()
+                .map(String::valueOf)
+                .reduce((left, right) -> left + "," + right)
+                .orElse("");
+        JsonNode response = callMethod("users.get", Map.of(
+                "user_ids", ids
+        ));
+        List<VkUser> users = new ArrayList<>();
+        for (JsonNode node : response.path("response")) {
+            users.add(new VkUser(
+                    node.path("id").asLong(),
+                    node.path("first_name").asText(""),
+                    node.path("last_name").asText("")
+            ));
+        }
+        return users;
     }
 
     private JsonNode callMethod(String method, Map<String, String> params) throws Exception {

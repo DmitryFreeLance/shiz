@@ -31,19 +31,22 @@ public final class MessageHandler {
     private final ProfileRepository profileRepository;
     private final KnowledgeRepository knowledgeRepository;
     private final KnowledgeService knowledgeService;
+    private final AdminService adminService;
 
     public MessageHandler(
             AppConfig config,
             VkApiClient vkApiClient,
             ProfileRepository profileRepository,
             KnowledgeRepository knowledgeRepository,
-            KnowledgeService knowledgeService
+            KnowledgeService knowledgeService,
+            AdminService adminService
     ) {
         this.config = config;
         this.vkApiClient = vkApiClient;
         this.profileRepository = profileRepository;
         this.knowledgeRepository = knowledgeRepository;
         this.knowledgeService = knowledgeService;
+        this.adminService = adminService;
     }
 
     public void handle(IncomingMessage message) {
@@ -57,14 +60,16 @@ public final class MessageHandler {
                 return;
             }
 
-            boolean addressed = !message.chat() || isAddressedToBot(text);
+            adminService.markActive(message.fromId(), message.peerId());
+
+            boolean addressed = !message.chat() || isAddressedToBot(text) || text.trim().startsWith("/admin");
             if (!addressed) {
                 return;
             }
 
             String command = stripAddress(text, message.chat()).trim();
             if (command.isBlank()) {
-                send(message.peerId(), helpMessage(config.isAdmin(message.fromId())));
+                send(message.peerId(), helpMessage(adminService.isAdmin(message.fromId())));
                 return;
             }
 
@@ -81,8 +86,16 @@ public final class MessageHandler {
     private String route(String command, IncomingMessage message) throws Exception {
         String normalized = TextUtils.normalize(command);
 
+        if (normalized.equals("/admin") || normalized.equals("admin")) {
+            return handleSlashAdmin("", message);
+        }
+
+        if (normalized.startsWith("/admin ")) {
+            return handleSlashAdmin(command.substring(command.indexOf(' ') + 1).trim(), message);
+        }
+
         if (normalized.equals("help") || normalized.equals("команды") || normalized.equals("помощь")) {
-            return helpMessage(config.isAdmin(message.fromId()));
+            return helpMessage(adminService.isAdmin(message.fromId()));
         }
 
         if (normalized.startsWith("админ ")) {
@@ -130,7 +143,7 @@ public final class MessageHandler {
     }
 
     private String handleAdminCommand(String adminCommand, IncomingMessage message) throws Exception {
-        if (!config.isAdmin(message.fromId())) {
+        if (!adminService.isAdmin(message.fromId())) {
             return "Эта команда доступна только администраторам.";
         }
 
@@ -156,6 +169,35 @@ public final class MessageHandler {
         }
 
         return "Не понял админ-команду. Напишите `Аксис help` и посмотрите блок администратора.";
+    }
+
+    private String handleSlashAdmin(String command, IncomingMessage message) throws Exception {
+        if (!adminService.isAdmin(message.fromId())) {
+            return "Команда /admin доступна только администраторам.";
+        }
+
+        String normalized = TextUtils.normalize(command);
+        if (normalized.isBlank()) {
+            return adminService.renderPanel();
+        }
+        if (normalized.equals("list")) {
+            return adminService.renderAdminList();
+        }
+        if (normalized.startsWith("add ")) {
+            long targetUserId = resolveUserId(command.substring(command.indexOf(' ') + 1).trim());
+            return adminService.addAdmin(targetUserId, message.fromId());
+        }
+        if (normalized.startsWith("remove ")) {
+            long targetUserId = resolveUserId(command.substring(command.indexOf(' ') + 1).trim());
+            return adminService.removeAdmin(targetUserId);
+        }
+        return """
+                Команда /admin поддерживает:
+                /admin
+                /admin list
+                /admin add id123456
+                /admin remove id123456
+                """.trim();
     }
 
     private String handleAdminProfile(String payload) throws Exception {
@@ -405,6 +447,7 @@ public final class MessageHandler {
                 - Аксис какой спектр у <имя|id|ссылка>
                 - Аксис какой индекс у <имя|id|ссылка>
                 - Аксис проверь пост: <текст>
+                - /admin
                 """;
 
         if (!admin) {
@@ -421,6 +464,10 @@ public final class MessageHandler {
                 - Аксис админ знание delete ; id=1
                 - Аксис админ мут ; пользователь=id123 ; время=30м ; причина=...
                 - Аксис админ размут ; пользователь=id123
+                - /admin
+                - /admin add id123456
+                - /admin remove id123456
+                - /admin list
                 """;
     }
 
