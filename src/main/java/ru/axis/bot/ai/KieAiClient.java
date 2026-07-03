@@ -10,6 +10,7 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import ru.axis.bot.config.AppConfig;
@@ -41,9 +42,11 @@ public final class KieAiClient {
             request.put("reasoning_effort", "low");
 
             HttpRequest httpRequest = HttpRequest.newBuilder()
-                    .uri(URI.create(config.kieBaseUrl() + "/" + config.kieModel() + "/v1/chat/completions"))
+                    .uri(URI.create(buildChatCompletionsUrl()))
                     .header("Authorization", "Bearer " + config.kieApiKey())
                     .header("Content-Type", "application/json")
+                    .header("Accept", "application/json")
+                    .timeout(Duration.ofSeconds(60))
                     .POST(HttpRequest.BodyPublishers.ofString(objectMapper.writeValueAsString(request), StandardCharsets.UTF_8))
                     .build();
 
@@ -67,13 +70,22 @@ public final class KieAiClient {
                 }
                 return builder.toString().trim();
             }
-        } catch (IOException | InterruptedException exception) {
+            log.warn("KIE.AI response did not contain assistant content: {}", response.body());
+        } catch (InterruptedException exception) {
             Thread.currentThread().interrupt();
+            log.error("Failed to call KIE.AI", exception);
+        } catch (IOException exception) {
             log.error("Failed to call KIE.AI", exception);
         } catch (Exception exception) {
             log.error("Unexpected KIE.AI error", exception);
         }
         return "";
+    }
+
+    private String buildChatCompletionsUrl() {
+        String baseUrl = config.kieBaseUrl().replaceAll("/+$", "");
+        String model = config.kieModel().replaceAll("^/+", "").replaceAll("/+$", "");
+        return baseUrl + "/" + model + "/v1/chat/completions";
     }
 
     private ObjectNode message(String role, String text) {

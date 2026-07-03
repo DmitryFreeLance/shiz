@@ -26,9 +26,13 @@ import ru.axis.bot.util.TextUtils;
 import ru.axis.bot.vk.VkApiClient;
 
 public final class MessageHandler {
+    private static final List<String> PROFILE_FIELDS = List.of("name", "gender", "age", "spectrum", "index", "note");
+    private static final List<String> KNOWLEDGE_FIELDS = List.of("category", "title", "keywords", "content");
     private static final Logger log = LoggerFactory.getLogger(MessageHandler.class);
     private static final Pattern WHOSE_SPECTRUM = Pattern.compile("(?iu).*(?:какой|скажи)?\\s*спектр\\s+у\\s+(.+?)\\??$");
     private static final Pattern WHOSE_INDEX = Pattern.compile("(?iu).*(?:какой|скажи)?\\s*(?:индекс)\\s+у\\s+(.+?)\\??$");
+    private static final Pattern DIRECT_SPECTRUM = Pattern.compile("(?iu)^(?:скажи\\s+)?спектр\\s+(?!у\\b)(.+?)\\??$");
+    private static final Pattern DIRECT_INDEX = Pattern.compile("(?iu)^(?:скажи\\s+)?индекс\\s+(?!у\\b)(.+?)\\??$");
     private static final Pattern NUMBER_ONLY = Pattern.compile("^\\d+$");
     private static final Pattern CHOOSE_NUMBER = Pattern.compile("(?iu)^выб(?:е|и)р(?:и|ать)?\\s+(\\d+)$");
 
@@ -39,6 +43,7 @@ public final class MessageHandler {
     private final KnowledgeService knowledgeService;
     private final AdminService adminService;
     private final Map<String, PendingModerationAction> pendingModerationActions = new ConcurrentHashMap<>();
+    private final Map<String, PendingDialog> pendingDialogs = new ConcurrentHashMap<>();
 
     public MessageHandler(
             AppConfig config,
@@ -72,6 +77,7 @@ public final class MessageHandler {
             boolean addressed = !message.chat()
                     || isAddressedToBot(text)
                     || text.trim().startsWith("/admin")
+                    || hasPendingDialog(message)
                     || hasPendingModeration(message);
             if (!addressed) {
                 return;
@@ -96,6 +102,13 @@ public final class MessageHandler {
     private String route(String command, IncomingMessage message) throws Exception {
         String normalized = TextUtils.normalize(command);
 
+        if (hasPendingDialog(message)) {
+            String dialogResult = tryResolvePendingDialog(command, message);
+            if (dialogResult != null) {
+                return dialogResult;
+            }
+        }
+
         if (hasPendingModeration(message)) {
             String selectionResult = tryResolvePendingModeration(command, message);
             if (selectionResult != null) {
@@ -113,6 +126,24 @@ public final class MessageHandler {
 
         if (normalized.equals("help") || normalized.equals("команды") || normalized.equals("помощь")) {
             return helpMessage(adminService.isAdmin(message.fromId()));
+        }
+
+        if (normalized.equals("создать профиль")
+                || normalized.equals("новый профиль")
+                || normalized.equals("добавить профиль")) {
+            return startProfileWizard(message, false);
+        }
+
+        if (normalized.equals("обновить профиль")
+                || normalized.equals("изменить профиль")
+                || normalized.equals("редактировать профиль")) {
+            return startProfileWizard(message, true);
+        }
+
+        if (normalized.equals("добавить знание")
+                || normalized.equals("создать знание")
+                || normalized.equals("новое знание")) {
+            return startKnowledgeWizard(message);
         }
 
         if (normalized.startsWith("админ ")) {
@@ -150,6 +181,16 @@ public final class MessageHandler {
             return renderNamedProfile(command.substring(command.indexOf(' ') + 1).trim());
         }
 
+        Matcher directSpectrumMatcher = DIRECT_SPECTRUM.matcher(command);
+        if (directSpectrumMatcher.matches()) {
+            return renderSpectrumForTarget(directSpectrumMatcher.group(1));
+        }
+
+        Matcher directIndexMatcher = DIRECT_INDEX.matcher(command);
+        if (directIndexMatcher.matches()) {
+            return renderIndexForTarget(directIndexMatcher.group(1));
+        }
+
         Matcher spectrumMatcher = WHOSE_SPECTRUM.matcher(command);
         if (spectrumMatcher.matches()) {
             return renderSpectrumForTarget(spectrumMatcher.group(1));
@@ -175,6 +216,24 @@ public final class MessageHandler {
         String normalized = TextUtils.normalize(adminCommand);
         if (normalized.equals("help") || normalized.equals("помощь") || normalized.equals("команды")) {
             return helpMessage(true);
+        }
+
+        if (normalized.equals("создать профиль")
+                || normalized.equals("новый профиль")
+                || normalized.equals("добавить профиль")) {
+            return startProfileWizard(message, false);
+        }
+
+        if (normalized.equals("обновить профиль")
+                || normalized.equals("изменить профиль")
+                || normalized.equals("редактировать профиль")) {
+            return startProfileWizard(message, true);
+        }
+
+        if (normalized.equals("добавить знание")
+                || normalized.equals("создать знание")
+                || normalized.equals("новое знание")) {
+            return startKnowledgeWizard(message);
         }
 
         if (normalized.startsWith("профиль ")) {
@@ -490,17 +549,15 @@ public final class MessageHandler {
 
     private String helpMessage(boolean admin) {
         String userHelp = """
-                Команды:
-                - !Аксис
-                - Аксис help
-                - Аксис мой профиль
-                - Аксис мой индекс
-                - Аксис мой спектр
-                - Аксис профиль <имя|id|ссылка>
-                - Аксис какой спектр у <имя|id|ссылка>
-                - Аксис какой индекс у <имя|id|ссылка>
-                - Аксис проверь пост: <текст>
-                - /admin
+                Аксис умеет:
+                - Мой профиль
+                - Мой спектр
+                - Мой индекс
+                - Профиль <имя>
+                - Спектр <имя>
+                - Индекс <имя>
+                - Любой вопрос по правилам, лору и сюжету
+                - Проверь пост
                 """;
 
         if (!admin) {
@@ -509,21 +566,13 @@ public final class MessageHandler {
 
         return userHelp + """
 
-                Админ-команды:
-                - Аксис админ профиль set ; пользователь=id123 ; имя=... ; пол=... ; возраст=... ; спектр=... ; индекс=... ; заметка=...
-                - Аксис админ профиль update ; пользователь=id123 ; спектр=... ; индекс=...
-                - Аксис админ профиль get ; пользователь=id123
-                - Аксис админ знание add ; категория=... ; заголовок=... ; ключи=... ; текст=...
-                - Аксис админ знание delete ; id=1
-                - Аксис мут Иван 30м
-                - Аксис размут Иван
-                - Аксис выбрать 2
-                - Аксис админ мут ; пользователь=Иван ; время=30м ; причина=...
-                - Аксис админ размут ; пользователь=Иван
+                Админу:
+                - Создать профиль
+                - Обновить профиль
+                - Добавить знание
+                - Мут <имя> [время]
+                - Размут <имя>
                 - /admin
-                - /admin add id123456
-                - /admin remove id123456
-                - /admin list
                 """;
     }
 
@@ -579,6 +628,28 @@ public final class MessageHandler {
 
     private boolean hasPendingModeration(IncomingMessage message) {
         return pendingModerationActions.containsKey(pendingKey(message));
+    }
+
+    private boolean hasPendingDialog(IncomingMessage message) {
+        return pendingDialogs.containsKey(pendingKey(message));
+    }
+
+    private String tryResolvePendingDialog(String command, IncomingMessage message) throws Exception {
+        PendingDialog dialog = pendingDialogs.get(pendingKey(message));
+        if (dialog == null) {
+            return null;
+        }
+
+        String normalized = TextUtils.normalize(command);
+        if (normalized.equals("отмена") || normalized.equals("cancel")) {
+            pendingDialogs.remove(pendingKey(message));
+            return "Действие отменено.";
+        }
+
+        return switch (dialog.type()) {
+            case PROFILE -> continueProfileWizard(dialog, command, message);
+            case KNOWLEDGE -> continueKnowledgeWizard(dialog, command, message);
+        };
     }
 
     private String tryResolvePendingModeration(String command, IncomingMessage message) throws Exception {
@@ -718,6 +789,168 @@ public final class MessageHandler {
         return message.peerId() + ":" + message.fromId();
     }
 
+    private String startProfileWizard(IncomingMessage message, boolean updateMode) throws Exception {
+        if (!adminService.isAdmin(message.fromId())) {
+            return "Эта команда доступна только администраторам.";
+        }
+
+        PendingDialog dialog = new PendingDialog(DialogType.PROFILE, 0, new LinkedHashMap<>(), message.fromId(), updateMode);
+        pendingDialogs.put(pendingKey(message), dialog);
+        return """
+                Начинаем %s.
+                Пришлите ссылку на VK, `id123456` или упоминание игрока.
+                Для отмены напишите `отмена`.
+                """.formatted(updateMode ? "обновление профиля" : "создание профиля").trim();
+    }
+
+    private String continueProfileWizard(PendingDialog dialog, String command, IncomingMessage message) throws Exception {
+        Map<String, String> values = dialog.values();
+        String input = command.trim();
+
+        if (dialog.stepIndex() == 0) {
+            long userId = resolveUserId(input);
+            PlayerProfile profile = profileRepository.findByUserId(userId).orElseGet(() -> {
+                PlayerProfile fresh = new PlayerProfile();
+                fresh.setVkUserId(userId);
+                fresh.setVkProfileUrl("https://vk.com/id" + userId);
+                return fresh;
+            });
+
+            values.put("userId", String.valueOf(userId));
+            values.put("profileUrl", safe(profile.getVkProfileUrl()).equals("не указано") ? "https://vk.com/id" + userId : profile.getVkProfileUrl());
+            values.put("name", nullToEmpty(profile.getCharacterName()));
+            values.put("gender", nullToEmpty(profile.getCharacterGender()));
+            values.put("age", nullToEmpty(profile.getCharacterAge()));
+            values.put("spectrum", nullToEmpty(profile.getSpectrum()));
+            values.put("index", nullToEmpty(profile.getCharacterIndex()));
+            values.put("note", nullToEmpty(profile.getNote()));
+
+            pendingDialogs.put(pendingKey(message), dialog.nextStep());
+            return profileFieldPrompt(values, 1, dialog.updateMode());
+        }
+
+        int fieldIndex = dialog.stepIndex() - 1;
+        String field = PROFILE_FIELDS.get(fieldIndex);
+        if (!isSkipValue(input)) {
+            values.put(field, input);
+        }
+
+        if (dialog.stepIndex() >= PROFILE_FIELDS.size()) {
+            PlayerProfile profile = new PlayerProfile();
+            profile.setVkUserId(Long.parseLong(values.get("userId")));
+            profile.setVkProfileUrl(values.get("profileUrl"));
+            profile.setCharacterName(blankToNull(values.get("name")));
+            profile.setCharacterGender(blankToNull(values.get("gender")));
+            profile.setCharacterAge(blankToNull(values.get("age")));
+            profile.setSpectrum(blankToNull(values.get("spectrum")));
+            profile.setCharacterIndex(blankToNull(values.get("index")));
+            profile.setNote(blankToNull(values.get("note")));
+            profileRepository.upsert(profile);
+            pendingDialogs.remove(pendingKey(message));
+            return "Профиль сохранён.\n\n" + renderProfile(profile);
+        }
+
+        PendingDialog nextDialog = dialog.nextStep();
+        pendingDialogs.put(pendingKey(message), nextDialog);
+        return profileFieldPrompt(values, nextDialog.stepIndex(), dialog.updateMode());
+    }
+
+    private String profileFieldPrompt(Map<String, String> values, int stepIndex, boolean updateMode) {
+        String field = PROFILE_FIELDS.get(stepIndex - 1);
+        String current = switch (field) {
+            case "name" -> values.get("name");
+            case "gender" -> values.get("gender");
+            case "age" -> values.get("age");
+            case "spectrum" -> values.get("spectrum");
+            case "index" -> values.get("index");
+            case "note" -> values.get("note");
+            default -> "";
+        };
+
+        String prompt = switch (field) {
+            case "name" -> "Введите имя персонажа:";
+            case "gender" -> "Введите пол:";
+            case "age" -> "Введите возраст:";
+            case "spectrum" -> "Введите спектр:";
+            case "index" -> "Введите индекс:";
+            case "note" -> "Введите заметку:";
+            default -> "Введите значение:";
+        };
+
+        if (updateMode || (current != null && !current.isBlank())) {
+            return prompt + "\nТекущее значение: " + safe(current) + "\nМожно отправить `-`, чтобы оставить как есть.";
+        }
+        return prompt + "\nМожно отправить `-`, если поле пока пустое.";
+    }
+
+    private String startKnowledgeWizard(IncomingMessage message) throws Exception {
+        if (!adminService.isAdmin(message.fromId())) {
+            return "Эта команда доступна только администраторам.";
+        }
+
+        PendingDialog dialog = new PendingDialog(DialogType.KNOWLEDGE, 0, new LinkedHashMap<>(), message.fromId(), false);
+        pendingDialogs.put(pendingKey(message), dialog);
+        return """
+                Начинаем добавление знания.
+                Введите категорию, например: правила, лор, сюжет, персонажи, локации.
+                Для отмены напишите `отмена`.
+                """.trim();
+    }
+
+    private String continueKnowledgeWizard(PendingDialog dialog, String command, IncomingMessage message) throws Exception {
+        Map<String, String> values = dialog.values();
+        String input = command.trim();
+
+        String field = KNOWLEDGE_FIELDS.get(dialog.stepIndex());
+        values.put(field, isSkipValue(input) ? "" : input);
+
+        if (dialog.stepIndex() >= KNOWLEDGE_FIELDS.size() - 1) {
+            String category = blankToNull(values.get("category"));
+            String title = blankToNull(values.get("title"));
+            String content = blankToNull(values.get("content"));
+            if (category == null || title == null || content == null) {
+                pendingDialogs.remove(pendingKey(message));
+                return "Не удалось сохранить знание: категория, заголовок и текст обязательны.";
+            }
+
+            KnowledgeEntry entry = new KnowledgeEntry();
+            entry.setCategory(category);
+            entry.setTitle(title);
+            entry.setKeywords(blankToNull(values.get("keywords")));
+            entry.setContent(content);
+            entry.setCreatedBy(message.fromId());
+            long id = knowledgeRepository.add(entry);
+            pendingDialogs.remove(pendingKey(message));
+            return "Запись добавлена в базу знаний. ID=" + id;
+        }
+
+        PendingDialog nextDialog = dialog.nextStep();
+        pendingDialogs.put(pendingKey(message), nextDialog);
+        return knowledgeFieldPrompt(nextDialog.stepIndex());
+    }
+
+    private String knowledgeFieldPrompt(int stepIndex) {
+        return switch (KNOWLEDGE_FIELDS.get(stepIndex)) {
+            case "title" -> "Введите заголовок записи:";
+            case "keywords" -> "Введите ключевые слова через запятую или `-`, если не нужны:";
+            case "content" -> "Введите текст записи:";
+            default -> "Введите значение:";
+        };
+    }
+
+    private boolean isSkipValue(String value) {
+        String normalized = TextUtils.normalize(value);
+        return normalized.equals("-") || normalized.equals("пропустить") || normalized.equals("skip");
+    }
+
+    private String nullToEmpty(String value) {
+        return value == null ? "" : value;
+    }
+
+    private String blankToNull(String value) {
+        return value == null || value.isBlank() ? null : value.trim();
+    }
+
     private void send(long peerId, String message) {
         try {
             vkApiClient.sendMessage(peerId, message);
@@ -736,5 +969,22 @@ public final class MessageHandler {
     }
 
     private record PendingModerationOption(long userId, String label) {
+    }
+
+    private enum DialogType {
+        PROFILE,
+        KNOWLEDGE
+    }
+
+    private record PendingDialog(
+            DialogType type,
+            int stepIndex,
+            Map<String, String> values,
+            long startedBy,
+            boolean updateMode
+    ) {
+        private PendingDialog nextStep() {
+            return new PendingDialog(type, stepIndex + 1, values, startedBy, updateMode);
+        }
     }
 }
