@@ -2,11 +2,14 @@ package ru.axis.bot.service;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import java.sql.SQLException;
+import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import org.slf4j.Logger;
@@ -17,6 +20,7 @@ import ru.axis.bot.db.ProfileRepository;
 import ru.axis.bot.model.IncomingMessage;
 import ru.axis.bot.model.KnowledgeEntry;
 import ru.axis.bot.model.PlayerProfile;
+import ru.axis.bot.model.VkUser;
 import ru.axis.bot.util.DurationParser;
 import ru.axis.bot.util.TextUtils;
 import ru.axis.bot.vk.VkApiClient;
@@ -25,6 +29,8 @@ public final class MessageHandler {
     private static final Logger log = LoggerFactory.getLogger(MessageHandler.class);
     private static final Pattern WHOSE_SPECTRUM = Pattern.compile("(?iu).*(?:какой|скажи)?\\s*спектр\\s+у\\s+(.+?)\\??$");
     private static final Pattern WHOSE_INDEX = Pattern.compile("(?iu).*(?:какой|скажи)?\\s*(?:индекс)\\s+у\\s+(.+?)\\??$");
+    private static final Pattern NUMBER_ONLY = Pattern.compile("^\\d+$");
+    private static final Pattern CHOOSE_NUMBER = Pattern.compile("(?iu)^выб(?:е|и)р(?:и|ать)?\\s+(\\d+)$");
 
     private final AppConfig config;
     private final VkApiClient vkApiClient;
@@ -32,6 +38,7 @@ public final class MessageHandler {
     private final KnowledgeRepository knowledgeRepository;
     private final KnowledgeService knowledgeService;
     private final AdminService adminService;
+    private final Map<String, PendingModerationAction> pendingModerationActions = new ConcurrentHashMap<>();
 
     public MessageHandler(
             AppConfig config,
@@ -62,7 +69,10 @@ public final class MessageHandler {
 
             adminService.markActive(message.fromId(), message.peerId());
 
-            boolean addressed = !message.chat() || isAddressedToBot(text) || text.trim().startsWith("/admin");
+            boolean addressed = !message.chat()
+                    || isAddressedToBot(text)
+                    || text.trim().startsWith("/admin")
+                    || hasPendingModeration(message);
             if (!addressed) {
                 return;
             }
@@ -86,6 +96,13 @@ public final class MessageHandler {
     private String route(String command, IncomingMessage message) throws Exception {
         String normalized = TextUtils.normalize(command);
 
+        if (hasPendingModeration(message)) {
+            String selectionResult = tryResolvePendingModeration(command, message);
+            if (selectionResult != null) {
+                return selectionResult;
+            }
+        }
+
         if (normalized.equals("/admin") || normalized.equals("admin")) {
             return handleSlashAdmin("", message);
         }
@@ -100,6 +117,14 @@ public final class MessageHandler {
 
         if (normalized.startsWith("админ ")) {
             return handleAdminCommand(command.substring(command.indexOf(' ') + 1).trim(), message);
+        }
+
+        if (normalized.startsWith("мут ")) {
+            return handleMute(command.trim(), message);
+        }
+
+        if (normalized.startsWith("размут ")) {
+            return handleUnmute(command.trim(), message);
         }
 
         if (normalized.equals("мой профиль")
@@ -282,37 +307,64 @@ public final class MessageHandler {
     }
 
     private String handleMute(String payload, IncomingMessage message) throws Exception {
+        if (!adminService.isAdmin(message.fromId())) {
+            return "Команда мута доступна только администраторам.";
+        }
         if (!message.chat()) {
             return "Мут можно выдать только в беседе.";
         }
 
-        Map<String, String> params = parseParams(payload.split("\\s*;\\s*"));
-        String userRef = firstNonBlank(params.get("пользователь"), params.get("user"), params.get("vk"));
-        if (userRef == null) {
-            return "Для мута нужен `пользователь=...`.";
+        ModerationRequest request = parseMuteRequest(payload);
+        if (request.target() == null || request.target().isBlank()) {
+            return "Напишите, кого мутить. Например: `Аксис мут Иван 30м`.";
         }
 
-        String durationRaw = firstNonBlank(params.get("время"), params.get("time"), "30м");
-        long userId = resolveUserId(userRef);
-        long seconds = DurationParser.parseSeconds(durationRaw);
-        String reason = firstNonBlank(params.get("причина"), params.get("reason"), "не указана");
+        ModerationResolution resolution = resolveModerationTarget(request.target(), message.peerId());
+        if (resolution.options() != null) {
+            pendingModerationActions.put(
+                    pendingKey(message),
+                    new PendingModerationAction("mute", request.durationRaw(), request.reason(), resolution.options())
+            );
+            return resolution.message();
+        }
+        if (resolution.message() != null) {
+            return resolution.message();
+        }
+
+        long userId = resolution.userId();
+        long seconds = DurationParser.parseSeconds(request.durationRaw());
+        String reason = request.reason();
 
         vkApiClient.changeConversationMemberRestrictions(message.peerId(), userId, "ro", seconds);
-        return "Ограничение выдано пользователю id" + userId + " на " + durationRaw + ". Причина: " + reason;
+        return "Ограничение выдано пользователю id" + userId + " на " + request.durationRaw() + ". Причина: " + reason;
     }
 
     private String handleUnmute(String payload, IncomingMessage message) throws Exception {
+        if (!adminService.isAdmin(message.fromId())) {
+            return "Команда размута доступна только администраторам.";
+        }
         if (!message.chat()) {
             return "Размут работает только в беседе.";
         }
 
-        Map<String, String> params = parseParams(payload.split("\\s*;\\s*"));
-        String userRef = firstNonBlank(params.get("пользователь"), params.get("user"), params.get("vk"));
-        if (userRef == null) {
-            return "Для размута нужен `пользователь=...`.";
+        String target = parseUnmuteTarget(payload);
+        if (target == null || target.isBlank()) {
+            return "Напишите, кого размутить. Например: `Аксис размут Иван`.";
         }
 
-        long userId = resolveUserId(userRef);
+        ModerationResolution resolution = resolveModerationTarget(target, message.peerId());
+        if (resolution.options() != null) {
+            pendingModerationActions.put(
+                    pendingKey(message),
+                    new PendingModerationAction("unmute", null, null, resolution.options())
+            );
+            return resolution.message();
+        }
+        if (resolution.message() != null) {
+            return resolution.message();
+        }
+
+        long userId = resolution.userId();
         vkApiClient.changeConversationMemberRestrictions(message.peerId(), userId, "rw", null);
         return "Ограничение снято с пользователя id" + userId + ".";
     }
@@ -439,6 +491,7 @@ public final class MessageHandler {
     private String helpMessage(boolean admin) {
         String userHelp = """
                 Команды:
+                - !Аксис
                 - Аксис help
                 - Аксис мой профиль
                 - Аксис мой индекс
@@ -462,8 +515,11 @@ public final class MessageHandler {
                 - Аксис админ профиль get ; пользователь=id123
                 - Аксис админ знание add ; категория=... ; заголовок=... ; ключи=... ; текст=...
                 - Аксис админ знание delete ; id=1
-                - Аксис админ мут ; пользователь=id123 ; время=30м ; причина=...
-                - Аксис админ размут ; пользователь=id123
+                - Аксис мут Иван 30м
+                - Аксис размут Иван
+                - Аксис выбрать 2
+                - Аксис админ мут ; пользователь=Иван ; время=30м ; причина=...
+                - Аксис админ размут ; пользователь=Иван
                 - /admin
                 - /admin add id123456
                 - /admin remove id123456
@@ -475,19 +531,19 @@ public final class MessageHandler {
         String lower = text.toLowerCase(Locale.ROOT);
         String botName = config.vkBotName().toLowerCase(Locale.ROOT);
         return lower.startsWith(botName)
+                || lower.startsWith("!" + botName)
                 || lower.startsWith("/axis")
+                || lower.startsWith("!axis")
                 || lower.startsWith("axis")
                 || lower.matches("^\\[club\\d+\\|[^\\]]*]\\s*.*");
     }
 
     private String stripAddress(String text, boolean chat) {
-        if (!chat) {
-            return text;
-        }
-
         String result = text.trim();
         result = result.replaceFirst("(?iu)^\\[club\\d+\\|[^\\]]*]\\s*", "");
+        result = result.replaceFirst("(?iu)^!" + Pattern.quote(config.vkBotName()) + "[\\s,!:.-]*", "");
         result = result.replaceFirst("(?iu)^" + Pattern.quote(config.vkBotName()) + "[\\s,!:.-]*", "");
+        result = result.replaceFirst("(?iu)^!axis[\\s,!:.-]*", "");
         result = result.replaceFirst("(?iu)^/axis[\\s,!:.-]*", "");
         result = result.replaceFirst("(?iu)^axis[\\s,!:.-]*", "");
         return result.trim();
@@ -521,11 +577,164 @@ public final class MessageHandler {
         return value == null || value.isBlank() ? "не указано" : value;
     }
 
+    private boolean hasPendingModeration(IncomingMessage message) {
+        return pendingModerationActions.containsKey(pendingKey(message));
+    }
+
+    private String tryResolvePendingModeration(String command, IncomingMessage message) throws Exception {
+        PendingModerationAction pendingAction = pendingModerationActions.get(pendingKey(message));
+        if (pendingAction == null) {
+            return null;
+        }
+
+        String normalized = TextUtils.normalize(command);
+        if (normalized.equals("отмена") || normalized.equals("cancel")) {
+            pendingModerationActions.remove(pendingKey(message));
+            return "Выбор отменён.";
+        }
+
+        Integer selectedIndex = parseSelectionIndex(command.trim());
+        if (selectedIndex == null) {
+            return "Уточните номер варианта. Например: `Аксис выбрать 2`.";
+        }
+        if (selectedIndex < 1 || selectedIndex > pendingAction.options().size()) {
+            return "Такого номера нет. Выберите вариант от 1 до " + pendingAction.options().size() + ".";
+        }
+
+        PendingModerationOption option = pendingAction.options().get(selectedIndex - 1);
+        pendingModerationActions.remove(pendingKey(message));
+
+        if (pendingAction.action().equals("mute")) {
+            long seconds = DurationParser.parseSeconds(pendingAction.durationRaw());
+            vkApiClient.changeConversationMemberRestrictions(message.peerId(), option.userId(), "ro", seconds);
+            return "Ограничение выдано пользователю id" + option.userId()
+                    + " (" + option.label() + ") на " + pendingAction.durationRaw()
+                    + ". Причина: " + pendingAction.reason();
+        }
+
+        vkApiClient.changeConversationMemberRestrictions(message.peerId(), option.userId(), "rw", null);
+        return "Ограничение снято с пользователя id" + option.userId() + " (" + option.label() + ").";
+    }
+
+    private ModerationRequest parseMuteRequest(String payload) {
+        String normalized = TextUtils.normalize(payload);
+        if (!payload.contains(";")) {
+            String raw = payload.replaceFirst("(?iu)^(?:админ\\s+)?мут\\s+", "").trim();
+            String[] tokens = raw.split("\\s+");
+            String durationRaw = "30м";
+            if (tokens.length >= 2) {
+                String lastToken = tokens[tokens.length - 1];
+                if (looksLikeDuration(lastToken)) {
+                    durationRaw = lastToken;
+                    raw = raw.substring(0, raw.length() - lastToken.length()).trim();
+                }
+            }
+            return new ModerationRequest(raw, durationRaw, "не указана", normalized);
+        }
+
+        Map<String, String> params = parseParams(payload.split("\\s*;\\s*"));
+        String target = firstNonBlank(params.get("пользователь"), params.get("user"), params.get("vk"));
+        String durationRaw = firstNonBlank(params.get("время"), params.get("time"), "30м");
+        String reason = firstNonBlank(params.get("причина"), params.get("reason"), "не указана");
+        return new ModerationRequest(target, durationRaw, reason, normalized);
+    }
+
+    private String parseUnmuteTarget(String payload) {
+        if (!payload.contains(";")) {
+            return payload.replaceFirst("(?iu)^(?:админ\\s+)?размут\\s+", "").trim();
+        }
+        Map<String, String> params = parseParams(payload.split("\\s*;\\s*"));
+        return firstNonBlank(params.get("пользователь"), params.get("user"), params.get("vk"));
+    }
+
+    private ModerationResolution resolveModerationTarget(String target, long peerId) throws Exception {
+        Long explicitUserId = TextUtils.tryParseVkUserId(target);
+        if (explicitUserId != null) {
+            return new ModerationResolution(explicitUserId, null, null);
+        }
+
+        Long resolvedUserId = resolveUserIdQuietly(target);
+        if (resolvedUserId != null) {
+            return new ModerationResolution(resolvedUserId, null, null);
+        }
+
+        List<PendingModerationOption> options = new ArrayList<>(adminService.findActiveUsersByName(peerId, target, 10).stream()
+                .map(user -> new PendingModerationOption(user.id(), user.displayName()))
+                .toList());
+
+        options = options.stream()
+                .sorted(Comparator.comparing(PendingModerationOption::label))
+                .toList();
+
+        if (options.isEmpty()) {
+            return new ModerationResolution(null, "Не нашёл активного пользователя с таким именем в этой беседе.", null);
+        }
+
+        if (options.size() == 1) {
+            return new ModerationResolution(options.getFirst().userId(), null, null);
+        }
+
+        return new ModerationResolution(null, renderAmbiguousModerationPrompt(options), options);
+    }
+
+    private String renderAmbiguousModerationPrompt(List<PendingModerationOption> options) {
+        StringBuilder builder = new StringBuilder("Нашёл несколько пользователей. Кого выбрать?\n");
+        for (int index = 0; index < options.size(); index++) {
+            PendingModerationOption option = options.get(index);
+            builder.append(index + 1)
+                    .append(". ")
+                    .append(option.label())
+                    .append(" (id")
+                    .append(option.userId())
+                    .append(")\n");
+        }
+        builder.append("\nОтветьте номером или командой `Аксис выбрать 2`.");
+        return builder.toString().trim();
+    }
+
+    private Integer parseSelectionIndex(String command) {
+        String trimmed = command.trim();
+        if (NUMBER_ONLY.matcher(trimmed).matches()) {
+            return Integer.parseInt(trimmed);
+        }
+
+        Matcher matcher = CHOOSE_NUMBER.matcher(TextUtils.normalize(trimmed));
+        if (matcher.matches()) {
+            return Integer.parseInt(matcher.group(1));
+        }
+        return null;
+    }
+
+    private boolean looksLikeDuration(String value) {
+        try {
+            DurationParser.parseSeconds(value);
+            return true;
+        } catch (Exception ignored) {
+            return false;
+        }
+    }
+
+    private String pendingKey(IncomingMessage message) {
+        return message.peerId() + ":" + message.fromId();
+    }
+
     private void send(long peerId, String message) {
         try {
             vkApiClient.sendMessage(peerId, message);
         } catch (Exception exception) {
             log.error("Failed to send VK message to peer {}", peerId, exception);
         }
+    }
+
+    private record ModerationRequest(String target, String durationRaw, String reason, String normalizedPayload) {
+    }
+
+    private record ModerationResolution(Long userId, String message, List<PendingModerationOption> options) {
+    }
+
+    private record PendingModerationAction(String action, String durationRaw, String reason, List<PendingModerationOption> options) {
+    }
+
+    private record PendingModerationOption(long userId, String label) {
     }
 }
