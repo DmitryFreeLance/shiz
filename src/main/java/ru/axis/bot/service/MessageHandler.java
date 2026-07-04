@@ -163,6 +163,10 @@ public final class MessageHandler {
             return renderProfilesList(message);
         }
 
+        if (normalized.equals("всезнания") || normalized.equals("знания") || normalized.equals("список знаний")) {
+            return renderKnowledgeList(message);
+        }
+
         if (normalized.startsWith("админ ")) {
             return handleAdminCommand(command.substring(command.indexOf(' ') + 1).trim(), message);
         }
@@ -611,6 +615,31 @@ public final class MessageHandler {
         return builder.toString().trim();
     }
 
+    private String renderKnowledgeList(IncomingMessage message) throws Exception {
+        if (!adminService.isAdmin(message.fromId())) {
+            return "Список знаний доступен только администраторам.";
+        }
+
+        List<KnowledgeEntry> entries = knowledgeRepository.findAll();
+        if (entries.isEmpty()) {
+            return "В базе пока нет записей знаний.";
+        }
+
+        StringBuilder builder = new StringBuilder("Знания в базе:\n");
+        for (KnowledgeEntry entry : entries.stream().limit(100).toList()) {
+            builder.append("- ID ")
+                    .append(entry.getId())
+                    .append(" | [")
+                    .append(safe(entry.getCategory()))
+                    .append("] ")
+                    .append(safe(entry.getTitle()))
+                    .append(" | ")
+                    .append(TextUtils.truncate(safe(entry.getContent()), 45))
+                    .append('\n');
+        }
+        return builder.toString().trim();
+    }
+
     private String handleSetReputation(String target, String reputationValue, IncomingMessage message) throws Exception {
         if (!adminService.isAdmin(message.fromId())) {
             return renderReputationForTarget(target);
@@ -745,6 +774,7 @@ public final class MessageHandler {
                 - Аксис обновить профиль
                 - Аксис удалить профиль <имя>
                 - Аксис профили
+                - Аксис всезнания
                 - Аксис добавить знание
 
                 Быстрые изменения:
@@ -997,9 +1027,14 @@ public final class MessageHandler {
         pendingDialogs.put(pendingKey(message), dialog);
         return """
                 Начинаем %s.
-                Пришлите ссылку на VK, `id123456` или упоминание игрока.
+                %s
                 Для отмены напишите `отмена`.
-                """.formatted(updateMode ? "обновление профиля" : "создание профиля").trim();
+                """.formatted(
+                updateMode ? "обновление профиля" : "создание профиля",
+                updateMode
+                        ? "Пришлите имя персонажа, ссылку на VK, `id123456` или упоминание игрока."
+                        : "Пришлите ссылку на VK, `id123456` или упоминание игрока."
+        ).trim();
     }
 
     private String continueProfileWizard(PendingDialog dialog, String command, IncomingMessage message) throws Exception {
@@ -1007,13 +1042,32 @@ public final class MessageHandler {
         String input = command.trim();
 
         if (dialog.stepIndex() == 0) {
-            long userId = resolveUserId(input);
-            PlayerProfile profile = profileRepository.findByUserId(userId).orElseGet(() -> {
-                PlayerProfile fresh = new PlayerProfile();
-                fresh.setVkUserId(userId);
-                fresh.setVkProfileUrl("https://vk.com/id" + userId);
-                return fresh;
-            });
+            long userId;
+            PlayerProfile profile;
+
+            if (dialog.updateMode()) {
+                Optional<PlayerProfile> existingProfile = resolveProfile(input);
+                if (existingProfile.isPresent()) {
+                    profile = existingProfile.get();
+                    userId = profile.getVkUserId();
+                } else {
+                    userId = resolveUserId(input);
+                    profile = profileRepository.findByUserId(userId).orElseGet(() -> {
+                        PlayerProfile fresh = new PlayerProfile();
+                        fresh.setVkUserId(userId);
+                        fresh.setVkProfileUrl("https://vk.com/id" + userId);
+                        return fresh;
+                    });
+                }
+            } else {
+                userId = resolveUserId(input);
+                profile = profileRepository.findByUserId(userId).orElseGet(() -> {
+                    PlayerProfile fresh = new PlayerProfile();
+                    fresh.setVkUserId(userId);
+                    fresh.setVkProfileUrl("https://vk.com/id" + userId);
+                    return fresh;
+                });
+            }
 
             values.put("userId", String.valueOf(userId));
             values.put("profileUrl", safe(profile.getVkProfileUrl()).equals("не указано") ? "https://vk.com/id" + userId : profile.getVkProfileUrl());
