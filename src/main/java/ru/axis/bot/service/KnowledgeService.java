@@ -99,6 +99,65 @@ public final class KnowledgeService {
         );
     }
 
+    public String answerWithDirectAi(String question) throws SQLException {
+        if (!config.aiConfigured()) {
+            return "Прямой ИИ-режим сейчас недоступен: `kie.ai` не настроен.";
+        }
+
+        List<KnowledgeHit> hits = search(question, 8);
+        String context;
+        if (hits.isEmpty()) {
+            List<KnowledgeEntry> allEntries = knowledgeRepository.findAll().stream()
+                    .limit(12)
+                    .toList();
+            if (allEntries.isEmpty()) {
+                return "Прямой ИИ-режим включён, но база знаний пока пуста. Сначала добавьте правила, лор или описание Аксиса.";
+            }
+            context = allEntries.stream()
+                    .map(entry -> """
+                            Категория: %s
+                            Заголовок: %s
+                            Ключи: %s
+                            Текст: %s
+                            """.formatted(
+                            entry.getCategory(),
+                            entry.getTitle(),
+                            entry.getKeywords(),
+                            entry.getContent()
+                    ))
+                    .collect(Collectors.joining("\n"));
+        } else {
+            context = renderContext(hits);
+        }
+
+        String answer = kieAiClient.chat(
+                """
+                Ты Аксис, системный интеллект тоталитарного киберпанк-проекта во VK.
+                Отвечай по-русски, в образе Аксиса, но не скатывайся в лишний пафос.
+                Основывайся на контексте базы знаний ниже.
+                Если вопрос просит идею или предложение, можешь делать осторожные выводы и предлагать варианты,
+                но явно помечай их как предложение Аксиса, а не как уже установленный канон.
+                Если контекста всё же не хватает, честно скажи, чего именно не хватает.
+                """,
+                """
+                Вопрос администратора:
+                %s
+
+                Контекст проекта:
+                %s
+
+                Дай полезный ответ. Если уместно, раздели его на:
+                - Что известно точно
+                - Что можно предложить
+                """.formatted(question, context)
+        );
+
+        if (answer.isBlank()) {
+            return "Не удалось получить ответ от ИИ. Проверьте `KIE_API_KEY`, сеть и логи контейнера.";
+        }
+        return answer;
+    }
+
     public List<KnowledgeHit> search(String query, int limit) throws SQLException {
         List<String> tokens = TextUtils.tokenize(query);
         return knowledgeRepository.findAll().stream()

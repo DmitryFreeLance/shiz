@@ -131,6 +131,14 @@ public final class MessageHandler {
             return helpMessage(adminService.isAdmin(message.fromId()));
         }
 
+        if (normalized.equals("ии")) {
+            return handleDirectAiHelp(message);
+        }
+
+        if (normalized.startsWith("ии ")) {
+            return handleDirectAi(command.substring(command.indexOf(' ') + 1).trim(), message);
+        }
+
         if (normalized.equals("создать профиль")
                 || normalized.equals("новый профиль")
                 || normalized.equals("добавить профиль")) {
@@ -230,6 +238,28 @@ public final class MessageHandler {
         }
 
         return knowledgeService.answerQuestion(command);
+    }
+
+    private String handleDirectAiHelp(IncomingMessage message) throws Exception {
+        if (!adminService.isAdmin(message.fromId())) {
+            return "Прямой ИИ-режим доступен только администраторам.";
+        }
+        return """
+                Режим ИИ:
+                - Аксис ИИ что можешь предложить по лору?
+                - Аксис ИИ оцени идею: ...
+                - Аксис ИИ ответь как Аксис: ...
+                """.trim();
+    }
+
+    private String handleDirectAi(String prompt, IncomingMessage message) throws Exception {
+        if (!adminService.isAdmin(message.fromId())) {
+            return "Прямой ИИ-режим доступен только администраторам.";
+        }
+        if (prompt.isBlank()) {
+            return handleDirectAiHelp(message);
+        }
+        return knowledgeService.answerWithDirectAi(prompt);
     }
 
     private String handleAdminCommand(String adminCommand, IncomingMessage message) throws Exception {
@@ -651,6 +681,7 @@ public final class MessageHandler {
 
                 Быстрые изменения:
                 - Аксис репутация <имя> = <значение>
+                - Аксис ИИ <вопрос>
 
                 Модерация:
                 - Аксис мут <имя>
