@@ -86,7 +86,9 @@ public final class MessageHandler {
                 return;
             }
 
-            String command = stripAddress(text, message.chat()).trim();
+            String command = hasPendingDialog(message)
+                    ? text.trim()
+                    : stripAddress(text, message.chat()).trim();
             if (command.isBlank()) {
                 send(message.peerId(), helpMessage(adminService.isAdmin(message.fromId())));
                 return;
