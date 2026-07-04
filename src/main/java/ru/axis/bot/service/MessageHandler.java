@@ -458,8 +458,11 @@ public final class MessageHandler {
         if (postText.isBlank() && message.replyText() != null) {
             postText = message.replyText().trim();
         }
+        if (postText.isBlank() && message.forwardedText() != null) {
+            postText = message.forwardedText().trim();
+        }
         if (postText.isBlank()) {
-            return "После команды `проверь пост` нужен текст поста или ответ на сообщение с постом.";
+            return "После команды `проверь пост` нужен текст поста, ответ на сообщение или пересланный пост.";
         }
         return knowledgeService.moderatePost(postText);
     }

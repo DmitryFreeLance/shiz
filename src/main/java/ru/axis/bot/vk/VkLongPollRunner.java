@@ -58,6 +58,33 @@ public final class VkLongPollRunner {
         boolean chat = peerId >= 2_000_000_000L;
         String text = messageNode.path("text").asText("");
         String replyText = messageNode.path("reply_message").path("text").asText("");
-        return new IncomingMessage(peerId, fromId, text, replyText, chat);
+        String forwardedText = flattenForwardedMessages(messageNode.path("fwd_messages")).trim();
+        return new IncomingMessage(peerId, fromId, text, replyText, forwardedText, chat);
+    }
+
+    private String flattenForwardedMessages(JsonNode forwardedMessages) {
+        if (forwardedMessages == null || !forwardedMessages.isArray() || forwardedMessages.isEmpty()) {
+            return "";
+        }
+
+        StringBuilder builder = new StringBuilder();
+        for (JsonNode forwardedMessage : forwardedMessages) {
+            String text = forwardedMessage.path("text").asText("").trim();
+            if (!text.isBlank()) {
+                if (!builder.isEmpty()) {
+                    builder.append("\n\n");
+                }
+                builder.append(text);
+            }
+
+            String nestedForwardedText = flattenForwardedMessages(forwardedMessage.path("fwd_messages"));
+            if (!nestedForwardedText.isBlank()) {
+                if (!builder.isEmpty()) {
+                    builder.append("\n\n");
+                }
+                builder.append(nestedForwardedText);
+            }
+        }
+        return builder.toString();
     }
 }

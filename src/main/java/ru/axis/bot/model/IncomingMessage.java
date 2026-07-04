@@ -5,6 +5,7 @@ public record IncomingMessage(
         long fromId,
         String text,
         String replyText,
+        String forwardedText,
         boolean chat
 ) {
 }
