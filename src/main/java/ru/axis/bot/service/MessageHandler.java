@@ -167,6 +167,10 @@ public final class MessageHandler {
             return renderKnowledgeList(message);
         }
 
+        if (normalized.startsWith("удалить профиль ")) {
+            return handleDeleteProfile(command);
+        }
+
         if (normalized.startsWith("админ ")) {
             return handleAdminCommand(command.substring(command.indexOf(' ') + 1).trim(), message);
         }
