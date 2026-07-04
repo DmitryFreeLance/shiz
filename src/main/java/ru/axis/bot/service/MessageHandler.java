@@ -292,6 +292,10 @@ public final class MessageHandler {
             return startKnowledgeWizard(message);
         }
 
+        if (normalized.equals("профили") || normalized.equals("список профилей")) {
+            return renderProfilesList(message);
+        }
+
         if (normalized.startsWith("профиль ")) {
             return handleAdminProfile(adminCommand.trim());
         }
@@ -579,6 +583,34 @@ public final class MessageHandler {
         return "Профиль `" + label + "` удалён.";
     }
 
+    private String renderProfilesList(IncomingMessage message) throws Exception {
+        if (!adminService.isAdmin(message.fromId())) {
+            return "Список профилей доступен только администраторам.";
+        }
+
+        List<PlayerProfile> profiles = profileRepository.findAll(100);
+        if (profiles.isEmpty()) {
+            return "В базе пока нет профилей.";
+        }
+
+        StringBuilder builder = new StringBuilder("Профили в базе:\n");
+        for (PlayerProfile profile : profiles) {
+            String name = safe(profile.getCharacterName());
+            String spectrum = safe(profile.getSpectrum());
+            String index = safe(profile.getCharacterIndex());
+            builder.append("- ")
+                    .append(name)
+                    .append(" | спектр: ")
+                    .append(spectrum)
+                    .append(" | индекс: ")
+                    .append(index)
+                    .append(" | id")
+                    .append(profile.getVkUserId())
+                    .append('\n');
+        }
+        return builder.toString().trim();
+    }
+
     private String handleSetReputation(String target, String reputationValue, IncomingMessage message) throws Exception {
         if (!adminService.isAdmin(message.fromId())) {
             return renderReputationForTarget(target);
@@ -712,6 +744,7 @@ public final class MessageHandler {
                 - Аксис создать профиль
                 - Аксис обновить профиль
                 - Аксис удалить профиль <имя>
+                - Аксис профили
                 - Аксис добавить знание
 
                 Быстрые изменения:

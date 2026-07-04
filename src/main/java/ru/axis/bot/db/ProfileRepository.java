@@ -108,6 +108,25 @@ public final class ProfileRepository {
         }
     }
 
+    public List<PlayerProfile> findAll(int limit) throws SQLException {
+        String sql = """
+                SELECT * FROM player_profiles
+                ORDER BY character_name IS NULL, character_name, vk_user_id
+                LIMIT ?
+                """;
+        try (Connection connection = database.openConnection();
+             PreparedStatement statement = connection.prepareStatement(sql)) {
+            statement.setInt(1, limit);
+            try (ResultSet resultSet = statement.executeQuery()) {
+                List<PlayerProfile> profiles = new ArrayList<>();
+                while (resultSet.next()) {
+                    profiles.add(map(resultSet));
+                }
+                return profiles;
+            }
+        }
+    }
+
     private PlayerProfile map(ResultSet resultSet) throws SQLException {
         PlayerProfile profile = new PlayerProfile();
         profile.setVkUserId(resultSet.getLong("vk_user_id"));
