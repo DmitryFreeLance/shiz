@@ -294,6 +294,10 @@ public final class MessageHandler {
             return handleAdminProfile(adminCommand.trim());
         }
 
+        if (normalized.startsWith("удалить профиль ")) {
+            return handleDeleteProfile(adminCommand.substring(adminCommand.indexOf(' ') + 1).trim());
+        }
+
         if (normalized.startsWith("знание ")) {
             return handleAdminKnowledge(adminCommand.trim(), message.fromId());
         }
@@ -366,6 +370,11 @@ public final class MessageHandler {
             return renderProfile(profile);
         }
 
+        if (normalizedHead.equals("профиль delete")) {
+            boolean deleted = profileRepository.deleteByUserId(userId);
+            return deleted ? "Профиль удалён." : "Профиль не найден.";
+        }
+
         if (normalizedHead.equals("профиль set") || normalizedHead.equals("профиль update")) {
             profile.setVkProfileUrl(firstNonBlank(params.get("ссылка"), params.get("link"), profile.getVkProfileUrl()));
             profile.setCharacterName(firstNonBlank(params.get("имя"), params.get("name"), profile.getCharacterName()));
@@ -379,7 +388,7 @@ public final class MessageHandler {
             return "Профиль сохранён.\n\n" + renderProfile(profile);
         }
 
-        return "Не понял команду профиля. Используйте `профиль set`, `профиль update` или `профиль get`.";
+        return "Не понял команду профиля. Используйте `профиль set`, `профиль update`, `профиль get` или `профиль delete`.";
     }
 
     private String handleAdminKnowledge(String payload, long adminId) throws Exception {
@@ -545,6 +554,29 @@ public final class MessageHandler {
                 .orElse("Не нашёл профиль, чтобы назвать репутацию.");
     }
 
+    private String handleDeleteProfile(String payload) throws Exception {
+        String target = payload.replaceFirst("(?iu)^удалить\\s+профиль\\s+", "").trim();
+        if (target.isBlank()) {
+            return "Напишите, чей профиль удалить. Например: `Аксис удалить профиль Дмитрий`.";
+        }
+
+        Optional<PlayerProfile> profileOptional = resolveProfile(target);
+        if (profileOptional.isEmpty()) {
+            return "Не нашёл профиль для удаления.";
+        }
+
+        PlayerProfile profile = profileOptional.get();
+        boolean deleted = profileRepository.deleteByUserId(profile.getVkUserId());
+        if (!deleted) {
+            return "Профиль не найден.";
+        }
+
+        String label = profile.getCharacterName() == null || profile.getCharacterName().isBlank()
+                ? "id" + profile.getVkUserId()
+                : profile.getCharacterName();
+        return "Профиль `" + label + "` удалён.";
+    }
+
     private String handleSetReputation(String target, String reputationValue, IncomingMessage message) throws Exception {
         if (!adminService.isAdmin(message.fromId())) {
             return renderReputationForTarget(target);
@@ -677,6 +709,7 @@ public final class MessageHandler {
                 Админка:
                 - Аксис создать профиль
                 - Аксис обновить профиль
+                - Аксис удалить профиль <имя>
                 - Аксис добавить знание
 
                 Быстрые изменения:
@@ -699,6 +732,7 @@ public final class MessageHandler {
                 - Аксис админ профиль set ; пользователь=id123 ; имя=... ; пол=... ; возраст=... ; спектр=... ; индекс=... ; репутация=... ; заметка=...
                 - Аксис админ профиль update ; пользователь=id123 ; спектр=... ; индекс=... ; репутация=...
                 - Аксис админ профиль get ; пользователь=id123
+                - Аксис админ профиль delete ; пользователь=id123
                 - Аксис админ знание add ; категория=... ; заголовок=... ; ключи=... ; текст=...
                 - Аксис админ знание delete ; id=1
                 - Аксис админ мут ; пользователь=Иван ; время=30м ; причина=...

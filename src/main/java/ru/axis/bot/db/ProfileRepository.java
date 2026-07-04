@@ -99,6 +99,15 @@ public final class ProfileRepository {
         }
     }
 
+    public boolean deleteByUserId(long userId) throws SQLException {
+        String sql = "DELETE FROM player_profiles WHERE vk_user_id = ?";
+        try (Connection connection = database.openConnection();
+             PreparedStatement statement = connection.prepareStatement(sql)) {
+            statement.setLong(1, userId);
+            return statement.executeUpdate() > 0;
+        }
+    }
+
     private PlayerProfile map(ResultSet resultSet) throws SQLException {
         PlayerProfile profile = new PlayerProfile();
         profile.setVkUserId(resultSet.getLong("vk_user_id"));
