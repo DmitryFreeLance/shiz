@@ -159,6 +159,10 @@ public final class MessageHandler {
             return startKnowledgeWizard(message);
         }
 
+        if (normalized.equals("профили") || normalized.equals("список профилей")) {
+            return renderProfilesList(message);
+        }
+
         if (normalized.startsWith("админ ")) {
             return handleAdminCommand(command.substring(command.indexOf(' ') + 1).trim(), message);
         }
@@ -290,10 +294,6 @@ public final class MessageHandler {
                 || normalized.equals("создать знание")
                 || normalized.equals("новое знание")) {
             return startKnowledgeWizard(message);
-        }
-
-        if (normalized.equals("профили") || normalized.equals("список профилей")) {
-            return renderProfilesList(message);
         }
 
         if (normalized.startsWith("профиль ")) {
