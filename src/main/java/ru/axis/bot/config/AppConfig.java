@@ -27,7 +27,7 @@ public record AppConfig(
         Path dataDir = Path.of(env("DATA_DIR", "/app/data")).toAbsolutePath().normalize();
         String kieApiKey = env("KIE_API_KEY", "");
         String kieBaseUrl = env("KIE_BASE_URL", "https://api.kie.ai");
-        String kieModel = env("KIE_MODEL", "gemini-3-flash");
+        String kieModel = env("KIE_MODEL", "gemini-2.5-flash");
         boolean aiEnabled = Boolean.parseBoolean(env("AI_ENABLED", "true"));
 
         return new AppConfig(

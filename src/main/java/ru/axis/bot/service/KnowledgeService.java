@@ -6,6 +6,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 import java.util.StringJoiner;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import ru.axis.bot.ai.KieAiClient;
 import ru.axis.bot.config.AppConfig;
@@ -16,6 +17,9 @@ import ru.axis.bot.util.TextUtils;
 
 public final class KnowledgeService {
     private static final Set<String> MODERATION_CATEGORIES = Set.of("правила", "лор", "сюжет");
+    private static final Pattern CREATOR_CLARIFICATION = Pattern.compile(
+            "(?iu)(?:\\s|^)(?:я\\s+)?уточн(?:ю|им)\\s+[^.?!]*создател[^.?!]*[.?!]?\\s*$"
+    );
 
     private final KnowledgeRepository knowledgeRepository;
     private final KieAiClient kieAiClient;
@@ -148,7 +152,9 @@ public final class KnowledgeService {
                 По умолчанию отвечай ёмко. Подробно отвечай только если об этом явно просят.
                 Не добавляй разделы вроде "Что известно точно" или "Что можно предложить".
                 Не добавляй предложения и идеи от себя, если тебя прямо об этом не попросили.
-                Если точного ответа в контексте нет, так и скажи. В конце ответа добавь, что уточнишь у своего создателя.
+                Если точного ответа в контексте нет, так и скажи.
+                Фразу о том, что ты уточнишь вопрос у своего создателя, добавляй только если данных действительно недостаточно
+                или ты не можешь дать точный ответ на основе контекста.
                 """,
                 """
                 Вопрос администратора:
@@ -164,7 +170,7 @@ public final class KnowledgeService {
         if (answer.isBlank()) {
             return "Не удалось получить ответ от ИИ. Проверьте `KIE_API_KEY`, сеть и логи контейнера.";
         }
-        return answer;
+        return normalizeDirectAiAnswer(answer);
     }
 
     public List<KnowledgeHit> search(String query, int limit) throws SQLException {
@@ -257,5 +263,25 @@ public final class KnowledgeService {
 
     private String lower(String value) {
         return value == null ? "" : value.toLowerCase(Locale.ROOT);
+    }
+
+    private String normalizeDirectAiAnswer(String answer) {
+        String normalized = answer.trim();
+        if (!shouldKeepCreatorClarification(normalized)) {
+            normalized = CREATOR_CLARIFICATION.matcher(normalized).replaceFirst("").trim();
+        }
+        return normalized;
+    }
+
+    private boolean shouldKeepCreatorClarification(String answer) {
+        String lower = answer.toLowerCase(Locale.ROOT);
+        return lower.contains("не знаю")
+                || lower.contains("не могу точно")
+                || lower.contains("нет точного ответа")
+                || lower.contains("недостаточно данных")
+                || lower.contains("не хватает данных")
+                || lower.contains("не располагаю")
+                || lower.contains("требуется уточнение")
+                || lower.contains("точный ответ отсутствует");
     }
 }

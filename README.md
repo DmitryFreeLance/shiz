@@ -31,7 +31,7 @@ VK-бот на Java для ролевого проекта. Работает в 
 - `DATA_DIR` - каталог для SQLite, по умолчанию `/app/data`.
 - `KIE_API_KEY` - API ключ `kie.ai`.
 - `KIE_BASE_URL` - базовый URL `kie.ai`, по умолчанию `https://api.kie.ai`.
-- `KIE_MODEL` - путь модели, по умолчанию `gemini-3-flash`.
+- `KIE_MODEL` - путь модели, по умолчанию `gemini-2.5-flash`.
 - `AI_ENABLED` - включить ИИ-функции (`true` или `false`).
 
 ## Настройка VK
