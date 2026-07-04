@@ -21,8 +21,8 @@ public final class ProfileRepository {
         String sql = """
                 INSERT INTO player_profiles (
                     vk_user_id, vk_profile_url, character_name, character_gender,
-                    character_age, spectrum, character_index, note, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    character_age, spectrum, character_index, reputation, note, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(vk_user_id) DO UPDATE SET
                     vk_profile_url = excluded.vk_profile_url,
                     character_name = excluded.character_name,
@@ -30,6 +30,7 @@ public final class ProfileRepository {
                     character_age = excluded.character_age,
                     spectrum = excluded.spectrum,
                     character_index = excluded.character_index,
+                    reputation = excluded.reputation,
                     note = excluded.note,
                     updated_at = excluded.updated_at
                 """;
@@ -43,8 +44,9 @@ public final class ProfileRepository {
             statement.setString(5, profile.getCharacterAge());
             statement.setString(6, profile.getSpectrum());
             statement.setString(7, profile.getCharacterIndex());
-            statement.setString(8, profile.getNote());
-            statement.setString(9, OffsetDateTime.now().toString());
+            statement.setString(8, profile.getReputation());
+            statement.setString(9, profile.getNote());
+            statement.setString(10, OffsetDateTime.now().toString());
             statement.executeUpdate();
         }
     }
@@ -106,6 +108,7 @@ public final class ProfileRepository {
         profile.setCharacterAge(resultSet.getString("character_age"));
         profile.setSpectrum(resultSet.getString("spectrum"));
         profile.setCharacterIndex(resultSet.getString("character_index"));
+        profile.setReputation(resultSet.getString("reputation"));
         profile.setNote(resultSet.getString("note"));
         return profile;
     }

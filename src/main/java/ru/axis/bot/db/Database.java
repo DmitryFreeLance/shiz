@@ -23,9 +23,13 @@ public final class Database {
                         character_age TEXT,
                         spectrum TEXT,
                         character_index TEXT,
+                        reputation TEXT,
                         note TEXT,
                         updated_at TEXT NOT NULL
                     )
+                    """);
+            executeIgnoringDuplicateColumn(connection, """
+                    ALTER TABLE player_profiles ADD COLUMN reputation TEXT
                     """);
             connection.createStatement().execute("""
                     CREATE TABLE IF NOT EXISTS knowledge_entries (
@@ -56,6 +60,16 @@ public final class Database {
                         last_seen_at TEXT NOT NULL
                     )
                     """);
+        }
+    }
+
+    private void executeIgnoringDuplicateColumn(Connection connection, String sql) throws SQLException {
+        try {
+            connection.createStatement().execute(sql);
+        } catch (SQLException exception) {
+            if (exception.getMessage() == null || !exception.getMessage().contains("duplicate column name")) {
+                throw exception;
+            }
         }
     }
 

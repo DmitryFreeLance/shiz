@@ -8,6 +8,7 @@ public final class PlayerProfile {
     private String characterAge;
     private String spectrum;
     private String characterIndex;
+    private String reputation;
     private String note;
 
     public long getVkUserId() {
@@ -64,6 +65,14 @@ public final class PlayerProfile {
 
     public void setCharacterIndex(String characterIndex) {
         this.characterIndex = characterIndex;
+    }
+
+    public String getReputation() {
+        return reputation;
+    }
+
+    public void setReputation(String reputation) {
+        this.reputation = reputation;
     }
 
     public String getNote() {

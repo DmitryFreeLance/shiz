@@ -26,13 +26,16 @@ import ru.axis.bot.util.TextUtils;
 import ru.axis.bot.vk.VkApiClient;
 
 public final class MessageHandler {
-    private static final List<String> PROFILE_FIELDS = List.of("name", "gender", "age", "spectrum", "index", "note");
+    private static final List<String> PROFILE_FIELDS = List.of("name", "gender", "age", "spectrum", "index", "reputation", "note");
     private static final List<String> KNOWLEDGE_FIELDS = List.of("category", "title", "keywords", "content");
     private static final Logger log = LoggerFactory.getLogger(MessageHandler.class);
     private static final Pattern WHOSE_SPECTRUM = Pattern.compile("(?iu).*(?:какой|скажи)?\\s*спектр\\s+у\\s+(.+?)\\??$");
     private static final Pattern WHOSE_INDEX = Pattern.compile("(?iu).*(?:какой|скажи)?\\s*(?:индекс)\\s+у\\s+(.+?)\\??$");
+    private static final Pattern WHOSE_REPUTATION = Pattern.compile("(?iu).*(?:какая|скажи)?\\s*репутац(?:ия|ию)\\s+у\\s+(.+?)\\??$");
     private static final Pattern DIRECT_SPECTRUM = Pattern.compile("(?iu)^(?:скажи\\s+)?спектр\\s+(?!у\\b)(.+?)\\??$");
     private static final Pattern DIRECT_INDEX = Pattern.compile("(?iu)^(?:скажи\\s+)?индекс\\s+(?!у\\b)(.+?)\\??$");
+    private static final Pattern DIRECT_REPUTATION = Pattern.compile("(?iu)^(?:скажи\\s+)?репутац(?:ия|ию)\\s+(?!у\\b)(.+?)\\??$");
+    private static final Pattern SET_REPUTATION = Pattern.compile("(?iu)^репутац(?:ия|ию)\\s+(.+?)\\s*=\\s*(.+)$");
     private static final Pattern NUMBER_ONLY = Pattern.compile("^\\d+$");
     private static final Pattern CHOOSE_NUMBER = Pattern.compile("(?iu)^выб(?:е|и)р(?:и|ать)?\\s+(\\d+)$");
 
@@ -177,8 +180,19 @@ public final class MessageHandler {
             return renderOwnSpectrum(message.fromId());
         }
 
+        if (normalized.equals("моя репутация")
+                || normalized.equals("скажи мою репутацию")
+                || normalized.contains("какая у меня репутация")) {
+            return renderOwnReputation(message.fromId());
+        }
+
         if (normalized.startsWith("профиль ")) {
             return renderNamedProfile(command.substring(command.indexOf(' ') + 1).trim());
+        }
+
+        Matcher setReputationMatcher = SET_REPUTATION.matcher(command);
+        if (setReputationMatcher.matches()) {
+            return handleSetReputation(setReputationMatcher.group(1), setReputationMatcher.group(2), message);
         }
 
         Matcher directSpectrumMatcher = DIRECT_SPECTRUM.matcher(command);
@@ -191,6 +205,11 @@ public final class MessageHandler {
             return renderIndexForTarget(directIndexMatcher.group(1));
         }
 
+        Matcher directReputationMatcher = DIRECT_REPUTATION.matcher(command);
+        if (directReputationMatcher.matches()) {
+            return renderReputationForTarget(directReputationMatcher.group(1));
+        }
+
         Matcher spectrumMatcher = WHOSE_SPECTRUM.matcher(command);
         if (spectrumMatcher.matches()) {
             return renderSpectrumForTarget(spectrumMatcher.group(1));
@@ -199,6 +218,11 @@ public final class MessageHandler {
         Matcher indexMatcher = WHOSE_INDEX.matcher(command);
         if (indexMatcher.matches()) {
             return renderIndexForTarget(indexMatcher.group(1));
+        }
+
+        Matcher reputationMatcher = WHOSE_REPUTATION.matcher(command);
+        if (reputationMatcher.matches()) {
+            return renderReputationForTarget(reputationMatcher.group(1));
         }
 
         if (normalized.startsWith("проверь пост")) {
@@ -319,6 +343,7 @@ public final class MessageHandler {
             profile.setCharacterAge(firstNonBlank(params.get("возраст"), params.get("age"), profile.getCharacterAge()));
             profile.setSpectrum(firstNonBlank(params.get("спектр"), params.get("spectrum"), profile.getSpectrum()));
             profile.setCharacterIndex(firstNonBlank(params.get("индекс"), params.get("index"), profile.getCharacterIndex()));
+            profile.setReputation(firstNonBlank(params.get("репутация"), params.get("reputation"), profile.getReputation()));
             profile.setNote(firstNonBlank(params.get("заметка"), params.get("note"), profile.getNote()));
             profileRepository.upsert(profile);
             return "Профиль сохранён.\n\n" + renderProfile(profile);
@@ -457,6 +482,12 @@ public final class MessageHandler {
                 .orElse("Ваш профиль пока не найден. Попросите администратора добавить спектр.");
     }
 
+    private String renderOwnReputation(long userId) throws SQLException {
+        return profileRepository.findByUserId(userId)
+                .map(profile -> fieldAnswer("репутация", profile.getCharacterName(), profile.getReputation()))
+                .orElse("Ваш профиль пока не найден. Попросите администратора добавить репутацию.");
+    }
+
     private String renderNamedProfile(String target) throws Exception {
         return resolveProfile(target)
                 .map(this::renderProfile)
@@ -473,6 +504,31 @@ public final class MessageHandler {
         return resolveProfile(target)
                 .map(profile -> fieldAnswer("индекс", profile.getCharacterName(), profile.getCharacterIndex()))
                 .orElse("Не нашёл профиль, чтобы назвать индекс.");
+    }
+
+    private String renderReputationForTarget(String target) throws Exception {
+        return resolveProfile(target)
+                .map(profile -> fieldAnswer("репутация", profile.getCharacterName(), profile.getReputation()))
+                .orElse("Не нашёл профиль, чтобы назвать репутацию.");
+    }
+
+    private String handleSetReputation(String target, String reputationValue, IncomingMessage message) throws Exception {
+        if (!adminService.isAdmin(message.fromId())) {
+            return renderReputationForTarget(target);
+        }
+
+        Optional<PlayerProfile> existingProfile = resolveProfile(target);
+        if (existingProfile.isEmpty()) {
+            return "Не нашёл профиль для обновления репутации.";
+        }
+
+        PlayerProfile profile = existingProfile.get();
+        profile.setReputation(reputationValue.trim());
+        profileRepository.upsert(profile);
+        String subject = profile.getCharacterName() == null || profile.getCharacterName().isBlank()
+                ? "Игроку"
+                : "Персонажу " + profile.getCharacterName();
+        return subject + " установлена репутация: " + profile.getReputation();
     }
 
     private Optional<PlayerProfile> resolveProfile(String rawTarget) throws Exception {
@@ -527,6 +583,7 @@ public final class MessageHandler {
                 Возраст: %s
                 Спектр: %s
                 Индекс: %s
+                Репутация: %s
                 Заметка: %s
                 """.formatted(
                 safe(profile.getVkProfileUrl()),
@@ -535,6 +592,7 @@ public final class MessageHandler {
                 safe(profile.getCharacterAge()),
                 safe(profile.getSpectrum()),
                 safe(profile.getCharacterIndex()),
+                safe(profile.getReputation()),
                 safe(profile.getNote())
         ).trim();
     }
@@ -549,15 +607,32 @@ public final class MessageHandler {
 
     private String helpMessage(boolean admin) {
         String userHelp = """
-                Аксис умеет:
-                - Мой профиль
-                - Мой спектр
-                - Мой индекс
-                - Профиль <имя>
-                - Спектр <имя>
-                - Индекс <имя>
-                - Любой вопрос по правилам, лору и сюжету
-                - Проверь пост
+                Команды Аксис
+
+                Профиль:
+                - Аксис мой профиль
+                - Аксис мой спектр
+                - Аксис мой индекс
+                - Аксис моя репутация
+
+                Другие игроки:
+                - Аксис профиль <имя>
+                - Аксис спектр <имя>
+                - Аксис индекс <имя>
+                - Аксис репутация <имя>
+
+                Лор и правила:
+                - Аксис, какой размер постов актива?
+                - Аксис, какие правила для анкет?
+                - Аксис, что известно о персонаже или локации?
+
+                Проверка поста:
+                - Аксис проверь пост: <текст>
+                - Аксис проверь пост
+
+                Служебное:
+                - !Аксис
+                - Аксис help
                 """;
 
         if (!admin) {
@@ -566,13 +641,34 @@ public final class MessageHandler {
 
         return userHelp + """
 
-                Админу:
-                - Создать профиль
-                - Обновить профиль
-                - Добавить знание
-                - Мут <имя> [время]
-                - Размут <имя>
+                Админка:
+                - Аксис создать профиль
+                - Аксис обновить профиль
+                - Аксис добавить знание
+
+                Быстрые изменения:
+                - Аксис репутация <имя> = <значение>
+
+                Модерация:
+                - Аксис мут <имя>
+                - Аксис мут <имя> 30м
+                - Аксис размут <имя>
+                - Аксис выбрать 2
+
+                Управление админами:
                 - /admin
+                - /admin list
+                - /admin add id123456
+                - /admin remove id123456
+
+                Технические команды:
+                - Аксис админ профиль set ; пользователь=id123 ; имя=... ; пол=... ; возраст=... ; спектр=... ; индекс=... ; репутация=... ; заметка=...
+                - Аксис админ профиль update ; пользователь=id123 ; спектр=... ; индекс=... ; репутация=...
+                - Аксис админ профиль get ; пользователь=id123
+                - Аксис админ знание add ; категория=... ; заголовок=... ; ключи=... ; текст=...
+                - Аксис админ знание delete ; id=1
+                - Аксис админ мут ; пользователь=Иван ; время=30м ; причина=...
+                - Аксис админ размут ; пользователь=Иван
                 """;
     }
 
@@ -823,6 +919,7 @@ public final class MessageHandler {
             values.put("age", nullToEmpty(profile.getCharacterAge()));
             values.put("spectrum", nullToEmpty(profile.getSpectrum()));
             values.put("index", nullToEmpty(profile.getCharacterIndex()));
+            values.put("reputation", nullToEmpty(profile.getReputation()));
             values.put("note", nullToEmpty(profile.getNote()));
 
             pendingDialogs.put(pendingKey(message), dialog.nextStep());
@@ -844,6 +941,7 @@ public final class MessageHandler {
             profile.setCharacterAge(blankToNull(values.get("age")));
             profile.setSpectrum(blankToNull(values.get("spectrum")));
             profile.setCharacterIndex(blankToNull(values.get("index")));
+            profile.setReputation(blankToNull(values.get("reputation")));
             profile.setNote(blankToNull(values.get("note")));
             profileRepository.upsert(profile);
             pendingDialogs.remove(pendingKey(message));
@@ -863,6 +961,7 @@ public final class MessageHandler {
             case "age" -> values.get("age");
             case "spectrum" -> values.get("spectrum");
             case "index" -> values.get("index");
+            case "reputation" -> values.get("reputation");
             case "note" -> values.get("note");
             default -> "";
         };
@@ -873,6 +972,7 @@ public final class MessageHandler {
             case "age" -> "Введите возраст:";
             case "spectrum" -> "Введите спектр:";
             case "index" -> "Введите индекс:";
+            case "reputation" -> "Введите репутацию:";
             case "note" -> "Введите заметку:";
             default -> "Введите значение:";
         };
